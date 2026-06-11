@@ -101,8 +101,9 @@ func gameDay(now time.Time, loc *time.Location) string {
 | GET | `/v1/skills` | 玩家技能等級/經驗 | 含各技能下一解鎖階層 |
 | POST | `/v1/players/me/race` | 選擇種族（犬/貓/翼） | 純身分；設定 race 與 homeKingdom（不影響分數） |
 | GET | `/v1/players/lookup?code=` | 用好友碼查玩家 | 發任務用 |
-| GET | `/v1/daily` | 取今日任務看板 | server 依 3 點邊界生成；含三國任務、只放已解鎖階層,可跨國挑 |
-| POST | `/v1/daily/{taskId}/complete` | 完成任務 | 貢獻分加到所屬王國 ＋ 技能 +經驗;回傳連勝/王國分/**技能升級與解鎖** |
+| GET | `/v1/daily` | 取今日任務看板 | server 依 3 點邊界 lazy 生成；**全任務列表**（已拍板）含活躍度分數與階段領取狀態；M1 加技能後只放已解鎖階層 |
+| POST | `/v1/daily/{taskId}/complete` | 完成任務 | 基礎分加到所屬王國（無連勝乘數，已拍板）＋ 累積活躍度;活躍度首達 120 即連勝 +1;M1 起 ＋ 技能經驗 |
+| POST | `/v1/daily/rewards/{stage}/claim` | 領取活躍度階段獎勵 | 階段 30/60/90 各 10 星砂；最終階段（120）= 50 + 10×連勝，封頂 25 天（企畫書 §6.1） |
 | GET | `/v1/kingdoms/scores` | 三國總分與排名 | 跨 client 真實彙總 |
 | GET | `/v1/inventory` | 道具清單 | 含「委託令」 |
 | POST | `/v1/shop/purchase` | 購買道具 | 本地走 PaymentGateway 直接發 |
@@ -118,15 +119,20 @@ func gameDay(now time.Time, loc *time.Location) string {
 ```
 players        { _id(playerId), friendCode, race("dog"|"cat"|"wing"),
                  homeKingdom, totalContribution, currentStreak,
-                 longestStreak, rank, createdAt }
+                 longestStreak, lastStreakDay, stardust, rank, createdAt }
+                 // lastStreakDay: 最近達成連勝線的遊戲日; stardust: 星砂（活躍度獎勵貨幣）
 playerSkills   { _id, playerId, skillId, level, xp }   // 每位玩家每項技能的等級/經驗
 skills         { _id("balance"), name("平衡"), kingdom("dog"),
                  maxLevel, xpCurve }                     // 技能定義
-dailySets      { _id, playerId, gameDay("2026-06-10"), tasks[], generatedAt }
-                 // tasks 來自三國,每筆帶 kingdom;只放玩家已解鎖的階層
+dailySets      { _id, playerId, gameDay("2026-06-10"), tasks[],
+                 points, claimed[], generatedAt }
+                 // tasks 為全任務列表（玩家自選）;points 今日活躍度;claimed[] 各階段領取狀態
+                 // M1 加技能後 tasks 只放玩家已解鎖的階層
 kingdomTotals  { _id:"dog"|"cat"|"wing", score, updatedAt }   // 各國任務累積貢獻分;或用 aggregation 即時算
-taskTemplates  { _id, kingdom("dog"|"cat"|"wing"), skillId, tier,
-                 unlockLevel, basePoints, skillXp, text }     // 每筆歸屬一國+一技能+階層;一般任務 skillId 可為 null
+taskTemplates  { _id(=Quest 表 ID, 首位=王國編號+4碼流水號), kingdom("dog"|"cat"|"wing"),
+                 skillId, tier, unlockLevel, basePoints, skillXp }
+                 // 來源為 Quest 資料表;每筆歸屬一國+一技能+階層;一般任務 skillId 可為 null
+                 // 顯示文字走 Language 表（Quest_{ID} / Quest_{ID}_Desc），不存於此
 inventory      { _id, playerId, sku, qty }
 commissions    { _id, fromPlayerId, toPlayerId, taskTemplateId,
                  status:"pending|completed|ignored", createdAt }
@@ -209,4 +215,4 @@ domain 層不依賴 HTTP、不依賴 Mongo、不依賴付款 SDK —— 這是�
 1. **是否保留離線 fallback**:全程要 server,還是斷線可玩、回連同步?(影響 client 複雜度)
 2. **委託任務得分歸屬**:發送者 / 接收者 / 雙方 —— 仍需先定方向(影響 `/inbox/complete` 結算邏輯與道具定位)。
 3. **好友系統範圍**:發任務限好友,還是任意好友碼 + 封鎖?
-4. **下一步**:可由我把 L0 的 Go 專案骨架(`main.go` + domain 計分/重置 + 記憶體 store + 幾支 handler)直接搭起來,讓你 `go run` 就能用 curl 打通流程。
+4. ~~**下一步**:L0 的 Go 專案骨架~~ ✅ 已完成——`server/` 已可 `go run ./cmd/server`：auth / 選種族 / 每日看板（lazy 生成）/ 完成計分 / 活躍度階段與連勝 / 王國彙總，任務池讀 `server/data/quest.json`（由 Sheet Importer 同步）。下一步為 L1（Mongo + 技能 + 委託）。
